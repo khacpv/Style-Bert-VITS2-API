@@ -1,5 +1,76 @@
 # Changelog
 
+## v2.6.1 (2024-09-09)
+
+- Google colabで、torchのバージョン由来でエラーが発生する不具合の修正（たぶん）
+- WebUIからのスタイル作成での、サブフォルダによるスタイル分けでエラーが発生していた点の修正
+
+## v2.6.0 (2024-06-16)
+
+### 新機能
+モデルのマージ時に、今までの `new = (1 - weight) * A + weight * B` の他に、次を追加
+
+- `new = A + weight * (B - C)`: 差分マージ
+- `new = a * A + b * B + c * C`: 加重和マージ
+- `new = A + weight * B`: ヌルモデルのマージ
+
+差分マージは、例えばBを「Cと同じ話者だけど囁いているモデル」とすると、`B - C`が囁きベクトル的なものだと思えるので、それをAに足すことで、Aの話者が囁いているような音声を生成できるようになります。
+
+また、加重和で`new = A - B`を作って、それをヌルモデルマージで別のモデルに足せば、実質差分マージを実現できます。また謎に`new = -A`や`new = 41 * A`等のモデルも作ることができます。
+
+これらのマージの活用法については各自いろいろ考えて実験してみて、面白い使い方があればぜひ共有してください。
+
+囁きについて実験的に作ったヌルモデルを[こちら](https://huggingface.co/litagin/sbv2_null_models)に置いています。これをヌルモデルマージで使うことで、任意のモデルを囁きモデルにある程度は変換できます。
+
+### 改善
+
+- スタイルベクトルのマージ部分のUIの改善
+- WebUIの`App.bat`の起動が少し重いので、それぞれの機能を分割した`Dataset.bat`, `Inference.bat`, `Merge.bat`, `StyleVectors.bat`, `Train.bat`を追加 (今までの`App.bat`もこれまで通り使えます)
+
+## v2.5.1 (2024-06-14)
+
+ライセンスとのコンフリクトから、[利用規約](/docs/TERMS_OF_USE.md)を[開発陣からのお願いとデフォルトモデルの利用規約](/docs/TERMS_OF_USE.md)に変更しました。
+
+## v2.5.0 (2024-06-02)
+
+このバージョンから[利用規約](/docs/TERMS_OF_USE.md)が追加されました。ご利用の際は必ずお読みください。
+
+### 新機能等
+
+- デフォルトモデルに [あみたろの声素材工房](https://amitaro.net/) のあみたろ様が公開しているコーパスとライブ配信音声を利用して学習した[**小春音アミ**](https://huggingface.co/litagin/sbv2_koharune_ami)と[**あみたろ**](https://huggingface.co/litagin/sbv2_amitaro)モデルを追加（あみたろ様には事前に連絡して許諾を得ています）
+    - アプデの場合は`Initialize.bat`をダブルクリックすればモデルをダウンロードできます（手動でダウンロードして`model_assets`フォルダに入れることも可能）
+- 学習時に音声データをスタイルごとにフォルダ分けしておくことで、そのフォルダごとのスタイルを学習時に自動的に作成するように
+    - `inputs`からスライスして使う場合は`inputs`直下に作りたいスタイルだけサブフォルダを作りそこに音声ファイルを配置
+    - `Data/モデル名/raw`から使う場合も`raw`直下に同様に配置
+    - サブフォルダの個数が0または1の場合は、今まで通りのNeutralスタイルのみが作成されます
+- batファイルでのインストールの大幅な高速化（Pythonのライブラリインストールに[uv](https://github.com/astral-sh/uv)を使用）
+- 学習時に「カスタムバッチサンプラーを無効化」オプションを追加。これにより、長い音声ファイルも学習に使われるようになりますが、使用VRAMがかなり増えたり学習が不安定になる可能性があります。
+- [よくある質問](/docs/FAQ.md)を追加
+- 英語の音声合成の速度向上（[gordon0414](https://github.com/gordon0414)さんによる[PR](https://github.com/litagin02/Style-Bert-VITS2/pull/124)です、ありがとうございます！）
+- エディターの各種機能改善（多くが[kamexy](https://github.com/kamexy)様による[エディターリポジトリ](https://github.com/litagin02/Style-Bert-VITS2-Editor)へのプルリク群です、ありがとうございます！）
+    - 選択した行の下に新規の行を作成できるように
+    - Mac使用時に日本語変換のエンターで音声合成が走るバグの修正
+    - ペースト時に改行を含まない場合は通常のペーストの振る舞いになるように修正
+
+
+### その他の改善
+
+- 上のスタイル自動作成機能を既存モデルでも使えるような機能追加。具体的には、スタイル作成タブにて、フォルダ分けされた音声ファイルのディレクトリを任意に指定し、そのフォルダ分けを使って既存のモデルのスタイルの作成が可能に
+- 音声書き起こしに[kotoba-whisper](https://huggingface.co/kotoba-tech/kotoba-whisper-v1.1)を追加
+- 音声書き起こし時にHugging FaceのWhisperモデルを使う際に、書き起こしを順次保存するように改善
+- 音声書き起こしのデフォルトをfaster-whiperからHugging FaceのWhisperモデルへ変更
+- （**ライブラリとしてのみ**）依存関係の軽量化、音声合成時に読み上げテキストの読みを表す音素列を指定する機能を追加 + 様々な改善 ([tsukumijimaさん](https://github.com/tsukumijima)による[プルリク](https://github.com/litagin02/Style-Bert-VITS2/pull/118)です、ありがとうございます！)
+
+### 内部変更
+
+- これまでpath管理に`configs/paths.yml`を使っていたが、`configs/default_paths.yml`にリネームし、`configs/paths.yml`はgitの管理対象外に変更
+
+### バグ修正
+
+- Gradioのアップデートにより、モデル選択時やスタイルのDBSCAN作成時等に`TypeError: Type is not JSON serializable: WindowsPath`のようなエラーが出る問題を修正
+- TensorboardをWebUIから立ち上げた際にエラーが出る問題の修正 ([#129](https://github.com/litagin02/Style-Bert-VITS2/issues/129))
+
+
 ## v2.4.1 (2024-03-16)
 
 **batファイルでのインストール・アップデート方法の変更**（それ以外の変更はありません）

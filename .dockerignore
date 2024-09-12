@@ -10,10 +10,12 @@
 !/configs/
 !/dict_data/default.csv
 !/model_assets/
+!/static/
 !/slm/
 
 !/config.py
 !/default_config.yml
+!/initialize.py
 !/requirements.txt
 !/server_editor.py
 !/server_fastapi.py

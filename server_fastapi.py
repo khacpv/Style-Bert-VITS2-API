@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from scipy.io import wavfile
 
-from config import config
+from config import get_config
 from style_bert_vits2.constants import (
     DEFAULT_ASSIST_TEXT_WEIGHT,
     DEFAULT_LENGTH,
@@ -40,6 +40,7 @@ from style_bert_vits2.nlp.japanese.user_dict import update_dict
 from style_bert_vits2.tts_model import TTSModel, TTSModelHolder
 
 
+config = get_config()
 ln = config.server_config.language
 
 
@@ -113,6 +114,12 @@ if __name__ == "__main__":
     load_models(model_holder)
 
     limit = config.server_config.limit
+    if limit < 1:
+        limit = None
+    else:
+        logger.info(
+            f"The maximum length of the text is {limit}. If you want to change it, modify config.yml. Set limit to -1 to remove the limit."
+        )
     app = FastAPI()
     allow_origins = config.server_config.origins
     if allow_origins:
@@ -134,6 +141,10 @@ if __name__ == "__main__":
         request: Request,
         text: str = Query(..., min_length=1, max_length=limit, description="セリフ"),
         encoding: str = Query(None, description="textをURLデコードする(ex, `utf-8`)"),
+        model_name: str = Query(
+            None,
+            description="モデル名(model_idより優先)。model_assets内のディレクトリ名を指定",
+        ),
         model_id: int = Query(
             0, description="モデルID。`GET /models/info`のkeyの値を指定ください"
         ),
@@ -191,6 +202,20 @@ if __name__ == "__main__":
         ):  # /models/refresh があるためQuery(le)で表現不可
             raise_validation_error(f"model_id={model_id} not found", "model_id")
 
+        if model_name:
+            # load_models() の 処理内容が i の正当性を担保していることに注意
+            model_ids = [i for i, x in enumerate(model_holder.models_info) if x.name == model_name]
+            if not model_ids:
+                raise_validation_error(
+                    f"model_name={model_name} not found", "model_name"
+                )
+            # 今の実装ではディレクトリ名が重複することは無いはずだが...
+            if len(model_ids) > 1:
+                raise_validation_error(
+                    f"model_name={model_name} is ambiguous", "model_name"
+                )
+            model_id = model_ids[0]
+            
         model = loaded_models[model_id]
         if speaker_name is None:
             if speaker_id not in model.id2spk.keys():
@@ -305,6 +330,9 @@ if __name__ == "__main__":
 
     logger.info(f"server listen: http://127.0.0.1:{config.server_config.port}")
     logger.info(f"API docs: http://127.0.0.1:{config.server_config.port}/docs")
+    logger.info(
+        f"Input text length limit: {limit}. You can change it in server.limit in config.yml"
+    )
     uvicorn.run(
         app, port=config.server_config.port, host="0.0.0.0", log_level="warning"
     )
