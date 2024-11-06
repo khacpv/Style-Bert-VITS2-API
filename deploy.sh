@@ -8,7 +8,8 @@ echo "バージョンは$VERSIONでよろしいですか？"
 read -p "y/N: " yn
 case "$yn" in [yY]*) ;; *) echo "中止します" ; exit ;; esac
 
-# Podsイメージ用のタグを追加
+# buildコマンド
 sudo DOCKER_BUILDKIT=1 docker build --progress=plain . -f Dockerfile.runpod -t $USER/$APP_NAME:$VERSION
 
+# pushコマンド
 sudo docker push $USER/$APP_NAME:$VERSION
