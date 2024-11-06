@@ -28,4 +28,4 @@ COPY server_fastapi.py .
 COPY start.sh .
 COPY server_fastapi.py .
 # ENTRYPOINT [ "python" ]
-CMD [ "./start.sh" ]
+CMD [ "python", "server_fastapi.py" ]
