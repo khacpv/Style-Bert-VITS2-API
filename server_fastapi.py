@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import unquote
 
-import GPUtil
+import GPUtil # type: ignore
 import psutil
 import torch
 import uvicorn
@@ -191,7 +191,7 @@ if __name__ == "__main__":
     ):
         """Infer text to speech(テキストから感情付き音声を生成する)"""
         logger.info(
-            f"{request.client.host}:{request.client.port}/voice  { unquote(str(request.query_params) )}"
+            f"{request.client.host}:{request.client.port}/voice  { unquote(str(request.query_params) )}" # type: ignore
         )
         if request.method == "GET":
             logger.warning(
@@ -320,7 +320,7 @@ if __name__ == "__main__":
     ):
         """wavデータを取得する"""
         logger.info(
-            f"{request.client.host}:{request.client.port}/tools/get_audio  { unquote(str(request.query_params) )}"
+            f"{request.client.host}:{request.client.port}/tools/get_audio  { unquote(str(request.query_params) )}" # type: ignore
         )
         if not os.path.isfile(path):
             raise_validation_error(f"path={path} not found", "path")
