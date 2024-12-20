@@ -19,6 +19,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
+from fastapi.staticfiles import StaticFiles
 from scipy.io import wavfile
 
 from config import get_config
@@ -176,6 +177,67 @@ if __name__ == "__main__":
         )
     # app.logger = logger
     # This doesn't seem to be working. Not sure how to override the logger.
+    
+    @app.get("/model_assets")
+    def list_assets_folder(request: Request):
+        """List all files and folders in model_assets directory"""
+        logger.info(
+            f"{request.client.host}:{request.client.port}/model_assets"
+        )
+        
+        assets_path = "model_assets"
+        if not os.path.exists(assets_path):
+            return []
+            
+        files_and_folders = []
+        
+        for root, dirs, files in os.walk(assets_path):
+            # Get relative path from model_assets
+            rel_path = os.path.relpath(root, assets_path)
+            if rel_path == ".":
+                rel_path = ""
+                
+            # Add files 
+            for file in files:
+                relative_path = os.path.join(rel_path, file).replace('\\', '/')
+                if relative_path.startswith('.'):
+                    continue
+                files_and_folders.append({
+                    "name": file,
+                    "path": relative_path,
+                    "type": "file",
+                    "size": os.path.getsize(os.path.join(root, file)),
+                    "url": f"/download?file_path={relative_path}"
+                })
+                
+        return files_and_folders
+    
+    @app.get("/download")
+    def download_model_file(
+        request: Request,
+        file_path: str = Query(..., description="Path to file in model_assets folder")
+    ):
+        """Download file from model_assets folder"""
+        logger.info(
+            f"{request.client.host}:{request.client.port}/download_model_file {unquote(str(request.query_params))}"
+        )
+        
+        full_path = os.path.join("model_assets", file_path)
+        
+        if not os.path.exists(full_path):
+            raise_validation_error(f"File not found: {file_path}", "file_path")
+            
+        if not os.path.isfile(full_path):
+            raise_validation_error(f"Not a file: {file_path}", "file_path")
+            
+        if "../" in file_path or "..\\" in file_path:
+            raise_validation_error("Invalid file path", "file_path")
+            
+        return FileResponse(
+            path=full_path,
+            filename=os.path.basename(file_path),
+            media_type="application/octet-stream"
+        )
 
     @app.api_route("/voice", methods=["GET", "POST"], response_class=AudioResponse)
     async def voice(
@@ -415,6 +477,7 @@ if __name__ == "__main__":
         model_holder.refresh()
         load_models(model_holder)
         return get_loaded_models_info()
+
 
     logger.info(f"server listen: http://127.0.0.1:{config.server_config.port}")
     logger.info(f"API docs: http://127.0.0.1:{config.server_config.port}/docs")
