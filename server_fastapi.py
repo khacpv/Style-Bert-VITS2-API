@@ -237,9 +237,7 @@ if __name__ == "__main__":
     ):
         """Infer text to speech (Generate emotional voice from text)"""
         logger.info(
-            # type: ignore
-            # type: ignore
-            f"{request.client.host}:{request.client.port}/voice  { unquote(str(request.query_params) )}"
+            f"{request.client.host}:{request.client.port}/voice  { unquote(str(request.query_params) )}" # type: ignore
         )
         if request.method == "GET":
             logger.warning(
