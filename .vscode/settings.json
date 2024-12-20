@@ -20,7 +20,7 @@
         "reportUnusedVariable": "information",
     },
     "[python]": {
-        "editor.defaultFormatter": "ms-python.black-formatter",
+        "editor.defaultFormatter": "ms-python.autopep8",
         "editor.formatOnType": true,
     },
 }

@@ -1,6 +1,6 @@
 """
 API server for TTS
-TODO: server_editor.pyと統合する?
+TODO: Integrate with server_editor.py?
 """
 
 import argparse
@@ -10,8 +10,9 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import unquote
+import boto3
 
-import GPUtil # type: ignore
+import GPUtil  # type: ignore
 import psutil
 import torch
 import uvicorn
@@ -44,15 +45,15 @@ config = get_config()
 ln = config.server_config.language
 
 
-# pyopenjtalk_worker を起動
-## pyopenjtalk_worker は TCP ソケットサーバーのため、ここで起動する
+# Start the pyopenjtalk_worker
+# The pyopenjtalk_worker is a TCP socket server, so it is started here.
 pyopenjtalk.initialize_worker()
 
-# dict_data/ 以下の辞書データを pyopenjtalk に適用
+# dict_data/ Apply the following dictionary data to pyopenjtalk.
 update_dict()
 
-# 事前に BERT モデル/トークナイザーをロードしておく
-## ここでロードしなくても必要になった際に自動ロードされるが、時間がかかるため事前にロードしておいた方が体験が良い
+# Preload BERT models/tokenizers.
+# While it would automatically load when needed, it's better to preload for a better user experience since loading takes time.
 bert_models.load_model(Languages.JP)
 bert_models.load_tokenizer(Languages.JP)
 bert_models.load_model(Languages.EN)
@@ -86,14 +87,54 @@ def load_models(model_holder: TTSModelHolder):
             style_vec_path=model_holder.root_dir / model_name / "style_vectors.npy",
             device=model_holder.device,
         )
-        # 起動時に全てのモデルを読み込むのは時間がかかりメモリを食うのでやめる
+        # Skip loading all models at startup since it takes time and consumes too much memory.
         # model.load()
         loaded_models.append(model)
 
 
+aws_key = config.server_config.aws_key
+aws_secret = config.server_config.aws_secret
+aws_region = config.server_config.aws_region
+bucket_name = config.server_config.aws_bucket_name
+
+s3Resource = boto3.resource('s3', region_name=aws_region, aws_access_key_id=aws_key,
+                            aws_secret_access_key=aws_secret)
+
+s3 = boto3.client('s3', region_name=aws_region, aws_access_key_id=aws_key,
+                  aws_secret_access_key=aws_secret)
+
+
+def downloadFile(s3Resource: Any, bucket_name: str, file_name: str, download_path: str):
+    print(f"Downloading {file_name} from S3")
+    s3Resource.Bucket(bucket_name).download_file(file_name, download_path)
+    print("Download completed.")
+
+
+def getS3ModelNames(s3: Any, bucket_name: str, folder: str):  # type: ignore
+    models = []
+    response = s3.list_objects_v2(Bucket=bucket_name, Prefix=folder)
+    if 'Contents' in response:
+        for obj in response['Contents']:
+            key = obj['Key']
+            model_name = key.split("/")[1]
+            model_entry = next(
+                (m for m in models if m["name"] == model_name), None)
+            if model_entry is None:
+                model_entry = {
+                    "name": model_name,
+                    "files": []
+                }
+                models.append(model_entry)
+
+            model_entry["files"].append(key)
+
+    return models
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--cpu", action="store_true", help="Use CPU instead of GPU")
+    parser.add_argument("--cpu", action="store_true",
+                        help="Use CPU instead of GPU")
     parser.add_argument(
         "--dir", "-d", type=str, help="Model directory", default=config.assets_root
     )
@@ -134,64 +175,71 @@ if __name__ == "__main__":
             allow_headers=["*"],
         )
     # app.logger = logger
-    # ↑効いていなさそう。loggerをどうやって上書きするかはよく分からなかった。
+    # This doesn't seem to be working. Not sure how to override the logger.
 
     @app.api_route("/voice", methods=["GET", "POST"], response_class=AudioResponse)
     async def voice(
         request: Request,
-        text: str = Query(..., min_length=1, max_length=limit, description="セリフ"),
-        encoding: str = Query(None, description="textをURLデコードする(ex, `utf-8`)"),
+        text: str = Query(..., min_length=1,
+                          max_length=limit, description="Text to speak"),
+        encoding: str = Query(
+            None, description="URL decode the text (ex, `utf-8`)"),
         model_name: str = Query(
             None,
-            description="モデル名(model_idより優先)。model_assets内のディレクトリ名を指定",
+            description="Model name (takes priority over model_id). Specify directory name in model_assets",
         ),
         model_id: int = Query(
-            0, description="モデルID。`GET /models/info`のkeyの値を指定ください"
+            0, description="Model ID. Please specify the key value from `GET /models/info`"
         ),
         speaker_name: str = Query(
             None,
-            description="話者名(speaker_idより優先)。esd.listの2列目の文字列を指定",
+            description="Speaker name (takes priority over speaker_id). Specify the string from the second column of esd.list",
         ),
         speaker_id: int = Query(
-            0, description="話者ID。model_assets>[model]>config.json内のspk2idを確認"
+            0, description="Speaker ID. Check spk2id in model_assets>[model]>config.json"
         ),
         sdp_ratio: float = Query(
             DEFAULT_SDP_RATIO,
-            description="SDP(Stochastic Duration Predictor)/DP混合比。比率が高くなるほどトーンのばらつきが大きくなる",
+            description="SDP(Stochastic Duration Predictor)/DP ratio. Higher ratio increases tone variation",
         ),
         noise: float = Query(
             DEFAULT_NOISE,
-            description="サンプルノイズの割合。大きくするほどランダム性が高まる",
+            description="Sample noise ratio. Higher values increase randomness",
         ),
         noisew: float = Query(
             DEFAULT_NOISEW,
-            description="SDPノイズ。大きくするほど発音の間隔にばらつきが出やすくなる",
+            description="SDP noise. Higher values increase variation in pronunciation timing",
         ),
         length: float = Query(
             DEFAULT_LENGTH,
-            description="話速。基準は1で大きくするほど音声は長くなり読み上げが遅まる",
+            description="Speech speed. Default is 1. Higher values make audio longer and speech slower",
         ),
-        language: Languages = Query(ln, description="textの言語"),
-        auto_split: bool = Query(DEFAULT_LINE_SPLIT, description="改行で分けて生成"),
+        language: Languages = Query(
+            ln, description="Language of the input text"),
+        auto_split: bool = Query(
+            DEFAULT_LINE_SPLIT, description="Split text by newlines when generating"),
         split_interval: float = Query(
-            DEFAULT_SPLIT_INTERVAL, description="分けた場合に挟む無音の長さ（秒）"
+            DEFAULT_SPLIT_INTERVAL, description="Length of silence (in seconds) between split segments"
         ),
         assist_text: Optional[str] = Query(
             None,
-            description="このテキストの読み上げと似た声音・感情になりやすくなる。ただし抑揚やテンポ等が犠牲になる傾向がある",
+            description="Reference text to make the voice and emotion similar. Note that intonation and tempo may be affected",
         ),
         assist_text_weight: float = Query(
-            DEFAULT_ASSIST_TEXT_WEIGHT, description="assist_textの強さ"
+            DEFAULT_ASSIST_TEXT_WEIGHT, description="Strength of assist text"
         ),
-        style: Optional[str] = Query(DEFAULT_STYLE, description="スタイル"),
-        style_weight: float = Query(DEFAULT_STYLE_WEIGHT, description="スタイルの強さ"),
+        style: Optional[str] = Query(DEFAULT_STYLE, description="Style"),
+        style_weight: float = Query(
+            DEFAULT_STYLE_WEIGHT, description="Style strength"),
         reference_audio_path: Optional[str] = Query(
-            None, description="スタイルを音声ファイルで行う"
+            None, description="Apply style from an audio file"
         ),
     ):
-        """Infer text to speech(テキストから感情付き音声を生成する)"""
+        """Infer text to speech (Generate emotional voice from text)"""
         logger.info(
-            f"{request.client.host}:{request.client.port}/voice  { unquote(str(request.query_params) )}" # type: ignore
+            # type: ignore
+            # type: ignore
+            f"{request.client.host}:{request.client.port}/voice  { unquote(str(request.query_params) )}"
         )
         if request.method == "GET":
             logger.warning(
@@ -199,23 +247,25 @@ if __name__ == "__main__":
             )
         if model_id >= len(
             model_holder.model_names
-        ):  # /models/refresh があるためQuery(le)で表現不可
-            raise_validation_error(f"model_id={model_id} not found", "model_id")
+        ):  # Cannot use Query(le) because /models/refresh exists
+            raise_validation_error(
+                f"model_id={model_id} not found", "model_id")
 
         if model_name:
-            # load_models() の 処理内容が i の正当性を担保していることに注意
-            model_ids = [i for i, x in enumerate(model_holder.models_info) if x.name == model_name]
+            # Note that the processing in load_models() ensures the validity of i
+            model_ids = [i for i, x in enumerate(
+                model_holder.models_info) if x.name == model_name]
             if not model_ids:
                 raise_validation_error(
                     f"model_name={model_name} not found", "model_name"
                 )
-            # 今の実装ではディレクトリ名が重複することは無いはずだが...
+            # With the current implementation, directory names should not be duplicated...
             if len(model_ids) > 1:
                 raise_validation_error(
                     f"model_name={model_name} is ambiguous", "model_name"
                 )
             model_id = model_ids[0]
-            
+
         model = loaded_models[model_id]
         if speaker_name is None:
             if speaker_id not in model.id2spk.keys():
@@ -257,7 +307,7 @@ if __name__ == "__main__":
 
     @app.get("/models/info")
     def get_loaded_models_info():
-        """ロードされたモデル情報の取得"""
+        """Get information about loaded models"""
 
         result: dict[str, dict[str, Any]] = dict()
         for model_id, model in enumerate(loaded_models):
@@ -273,14 +323,14 @@ if __name__ == "__main__":
 
     @app.post("/models/refresh")
     def refresh():
-        """モデルをパスに追加/削除した際などに読み込ませる"""
+        """Reload models when models are added/removed from the path"""
         model_holder.refresh()
         load_models(model_holder)
         return get_loaded_models_info()
 
     @app.get("/status")
     def get_status():
-        """実行環境のステータスを取得"""
+        """Get runtime environment status"""
         cpu_percent = psutil.cpu_percent(interval=1)
         memory_info = psutil.virtual_memory()
         memory_total = memory_info.total
@@ -318,7 +368,7 @@ if __name__ == "__main__":
     def get_audio(
         request: Request, path: str = Query(..., description="local wav path")
     ):
-        """wavデータを取得する"""
+        """Get wav data"""
         logger.info(
             f"{request.client.host}:{request.client.port}/tools/get_audio  { unquote(str(request.query_params) )}" # type: ignore
         )
@@ -327,6 +377,46 @@ if __name__ == "__main__":
         if not path.lower().endswith(".wav"):
             raise_validation_error(f"wav file not found in {path}", "path")
         return FileResponse(path=path, media_type="audio/wav")
+
+    @app.get("/list_s3_model")
+    def list_s3_model(request: Request,  # type: ignore
+                      folder: str = Query("outputs", description='folder contain model name. ex: outputs')):
+        """List model from S3"""
+        models = getS3ModelNames(s3, bucket_name, folder)
+
+        missing_models = []
+        for model in models:
+            model_path = os.path.join("model_assets", model["name"])
+            if not os.path.exists(model_path):
+                missing_models.append(model["name"])
+
+        return {"modes": models, "missing": missing_models}
+
+    @app.get("/sync_s3_model")
+    def sync_s3_model(request: Request,
+                      folder: str = Query("outputs", description='folder contain model name. ex: outputs')):
+        """Sync model from S3"""
+        models = getS3ModelNames(s3, bucket_name, folder)
+        missing_models = []
+        for model in models:
+            model_path = os.path.join("model_assets", model["name"])
+            if not os.path.exists(model_path):
+                missing_models.append(model["name"])
+
+        for model_name in missing_models:
+            for model in models:
+                if model["name"] == model_name:
+                    for file in model["files"]:
+                        os.makedirs(os.path.join("model_assets",
+                                    model_name), exist_ok=True)
+                        download_path = os.path.join(
+                            "model_assets", model_name, file.split("/")[2])
+                        downloadFile(s3Resource, bucket_name,
+                                     file, download_path)
+
+        model_holder.refresh()
+        load_models(model_holder)
+        return get_loaded_models_info()
 
     logger.info(f"server listen: http://127.0.0.1:{config.server_config.port}")
     logger.info(f"API docs: http://127.0.0.1:{config.server_config.port}/docs")

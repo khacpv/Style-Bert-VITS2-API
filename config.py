@@ -200,6 +200,10 @@ class Server_config:
         limit: int = 100,
         language: str = "JP",
         origins: list[str] = ["*"],
+        aws_key: str = '',
+        aws_secret: str = '',
+        aws_region: str = '',
+        aws_bucket_name: str = ''
     ):
         self.port: int = port
         if not cuda_available:
@@ -208,6 +212,10 @@ class Server_config:
         self.language: str = language
         self.limit: int = limit
         self.origins: list[str] = origins
+        self.aws_key: str = aws_key
+        self.aws_secret: str = aws_secret
+        self.aws_region: str = aws_region
+        self.aws_bucket_name: str = aws_bucket_name
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]):
