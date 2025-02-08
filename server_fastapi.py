@@ -111,6 +111,36 @@ def downloadFile(s3Resource: Any, bucket_name: str, file_name: str, download_pat
     print("Download completed.")
 
 
+def downloadAllFilesInFolderFromS3(s3Resource: Any, bucket_name: str, folder_name: str, download_path: str):
+    # Create download_path if it does not exist
+    if not os.path.exists(download_path):
+        os.makedirs(download_path)
+
+    print(
+        f"Downloading all files from folder {folder_name} in S3 bucket {bucket_name} to {download_path}")
+    response = s3.list_objects_v2(Bucket=bucket_name, Prefix=folder_name)
+
+    downloaded_files: list[str] = []
+
+    if 'Contents' in response:
+        for obj in response['Contents']:
+            file_name = obj['Key']
+            if not file_name.endswith('/'):  # Only process files
+                local_file_path = os.path.join(
+                    download_path, os.path.relpath(file_name, folder_name))
+                local_file_dir = os.path.dirname(local_file_path)
+                # Create subdirectories if they do not exist
+                if not os.path.exists(local_file_dir):
+                    os.makedirs(local_file_dir)
+                downloadFile(s3Resource, bucket_name,
+                             file_name, local_file_path)
+                downloaded_files.append(local_file_path)
+    else:
+        print("No files found in the specified folder.")
+
+    return downloaded_files
+
+
 def getS3ModelNames(s3: Any, bucket_name: str, folder: str):  # type: ignore
     models = []
     response = s3.list_objects_v2(Bucket=bucket_name, Prefix=folder)
@@ -177,27 +207,27 @@ if __name__ == "__main__":
         )
     # app.logger = logger
     # This doesn't seem to be working. Not sure how to override the logger.
-    
+
     @app.get("/model_assets")
     def list_assets_folder(request: Request):
         """List all files and folders in model_assets directory"""
         logger.info(
             f"{request.client.host}:{request.client.port}/model_assets"
         )
-        
+
         assets_path = "model_assets"
         if not os.path.exists(assets_path):
             return []
-            
+
         files_and_folders = []
-        
+
         for root, dirs, files in os.walk(assets_path):
             # Get relative path from model_assets
             rel_path = os.path.relpath(root, assets_path)
             if rel_path == ".":
                 rel_path = ""
-                
-            # Add files 
+
+            # Add files
             for file in files:
                 relative_path = os.path.join(rel_path, file).replace('\\', '/')
                 if relative_path.startswith('.'):
@@ -209,30 +239,31 @@ if __name__ == "__main__":
                     "size": os.path.getsize(os.path.join(root, file)),
                     "url": f"/download?file_path={relative_path}"
                 })
-                
+
         return files_and_folders
-    
+
     @app.get("/download")
     def download_model_file(
         request: Request,
-        file_path: str = Query(..., description="Path to file in model_assets folder")
+        file_path: str = Query(...,
+                               description="Path to file in model_assets folder")
     ):
         """Download file from model_assets folder"""
         logger.info(
             f"{request.client.host}:{request.client.port}/download_model_file {unquote(str(request.query_params))}"
         )
-        
+
         full_path = os.path.join("model_assets", file_path)
-        
+
         if not os.path.exists(full_path):
             raise_validation_error(f"File not found: {file_path}", "file_path")
-            
+
         if not os.path.isfile(full_path):
             raise_validation_error(f"Not a file: {file_path}", "file_path")
-            
+
         if "../" in file_path or "..\\" in file_path:
             raise_validation_error("Invalid file path", "file_path")
-            
+
         return FileResponse(
             path=full_path,
             filename=os.path.basename(file_path),
@@ -299,7 +330,8 @@ if __name__ == "__main__":
     ):
         """Infer text to speech (Generate emotional voice from text)"""
         logger.info(
-            f"{request.client.host}:{request.client.port}/voice  { unquote(str(request.query_params) )}" # type: ignore
+            # type: ignore
+            f"{request.client.host}:{request.client.port}/voice  { unquote(str(request.query_params) )}"
         )
         if request.method == "GET":
             logger.warning(
@@ -430,7 +462,8 @@ if __name__ == "__main__":
     ):
         """Get wav data"""
         logger.info(
-            f"{request.client.host}:{request.client.port}/tools/get_audio  { unquote(str(request.query_params) )}" # type: ignore
+            # type: ignore
+            f"{request.client.host}:{request.client.port}/tools/get_audio  { unquote(str(request.query_params) )}"
         )
         if not os.path.isfile(path):
             raise_validation_error(f"path={path} not found", "path")
@@ -478,6 +511,12 @@ if __name__ == "__main__":
         load_models(model_holder)
         return get_loaded_models_info()
 
+    @app.get("/sync_all_s3_models")
+    def sync_all_s3_models(request: Request, folder: str = Query("outputs", description='folder contain files to download'), download_path: str = Query("model_assets", description='path to download files')):
+        """Sync all models from S3"""
+        downloadAllFilesInFolderFromS3(
+            s3Resource, bucket_name, folder, download_path)
+        return {"message": "All files in " + folder + " has been downloaded to " + download_path}
 
     logger.info(f"server listen: http://127.0.0.1:{config.server_config.port}")
     logger.info(f"API docs: http://127.0.0.1:{config.server_config.port}/docs")
